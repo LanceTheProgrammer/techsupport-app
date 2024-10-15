@@ -2,6 +2,9 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
+const { body, validationResult } = require('express-validator');
 require('dotenv').config();
 
 const app = express();
@@ -19,12 +22,7 @@ const connectDB = async () => {
         }
 
         console.log('Attempting to connect to MongoDB...');
-        const conn = await mongoose.connect(process.env.MONGODB_URI, {
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
-            useFindAndModify: false,
-            useCreateIndex: true,
-        });
+        const conn = await mongoose.connect(process.env.MONGODB_URI, {});
         console.log(`MongoDB Connected: ${conn.connection.host}`);
     } catch (error) {
         console.error('MongoDB connection error:');
@@ -38,6 +36,84 @@ const connectDB = async () => {
 };
 
 connectDB();
+
+// JWT Secret Key
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key'; // Use environment variable in production
+
+// Middleware to verify JWT token
+const verifyToken = (req, res, next) => {
+    const token = req.header('Authorization')?.split(' ')[1];
+
+    if (!token) {
+        return res.status(401).json({ success: false, message: 'Access denied. No token provided.' });
+    }
+
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        req.user = decoded;
+        next();
+    } catch (error) {
+        res.status(400).json({ success: false, message: 'Invalid token.' });
+    }
+};
+
+// User Model for Authentication
+const userSchema = new mongoose.Schema({
+    username: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+    role: { type: String, enum: ['admin', 'user'], default: 'user' }
+});
+
+const User = mongoose.model('User', userSchema);
+
+app.post('/api/register', [
+    body('username').isString().notEmpty().withMessage('Username is required'),
+    body('password').isString().isLength({ min: 6 }).withMessage('Password must be at least 6 characters long'),
+    body('role').optional().isIn(['admin', 'user']).withMessage('Role must be either admin or user'),
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { username, password, role } = req.body;
+    try {
+        const hashedPassword = await bcrypt.hash(password, 10); // Hash the password
+        const user = new User({ username, password: hashedPassword, role });
+        await user.save();
+        res.status(201).json({ success: true, data: user });
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message });
+    }
+});
+
+// Authentication Routes
+app.post('/api/login', [
+    body('username').isString().notEmpty().withMessage('Username is required'),
+    body('password').isString().notEmpty().withMessage('Password is required'),
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { username, password } = req.body;
+    try {
+        const user = await User.findOne({ username });
+        if (user && await bcrypt.compare(password, user.password)) { // Compare hashed password
+            const token = jwt.sign({ userId: user._id, role: user.role }, JWT_SECRET, { expiresIn: '1h' });
+            res.json({ success: true, token });
+        } else {
+            res.status(401).json({ success: false, message: 'Invalid credentials' });
+        }
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+app.post('/api/validate-token', verifyToken, (req, res) => {
+    res.json({ valid: true, user: req.user });
+});
 
 // Client Model with validation
 const clientSchema = new mongoose.Schema({
@@ -184,7 +260,7 @@ app.delete('/api/services/:id', async (req, res) => {
     }
 });
 
-// Routes for Bookings
+// Booking Routes
 app.post('/api/bookings', async (req, res) => {
     try {
         const booking = new Booking(req.body);
@@ -195,19 +271,8 @@ app.post('/api/bookings', async (req, res) => {
     }
 });
 
-// Update booking status
-app.put('/api/bookings/:id', async (req, res) => {
-    try {
-        const booking = await Booking.findById(req.params.id);
-        if (!booking) {
-            return res.status(404).json({ success: false, message: 'Booking not found' });
-        }
-        const updatedBooking = await Booking.findByIdAndUpdate(req.params.id, req.body, { new: true });
-        res.json({ success: true, data: updatedBooking });
-    } catch (error) {
-        res.status(400).json({ success: false, message: error.message });
-    }
-});
-
+// Server Listening
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+});

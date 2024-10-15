@@ -10,7 +10,12 @@ function Services() {
     const fetchServices = async () => {
       try {
         const response = await axios.get('/api/services');
-        setServices(response.data);
+        // Check if response.data is an array before setting it to services
+        if (Array.isArray(response.data)) {
+          setServices(response.data);
+        } else {
+          console.error('API did not return an array:', response.data);
+        }
       } catch (error) {
         console.error('Error fetching services:', error);
       }
@@ -18,6 +23,11 @@ function Services() {
 
     fetchServices();
   }, []);
+
+  // Handle cases where services is not an array or is empty
+  if (!Array.isArray(services) || services.length === 0) {
+    return <div>No services available at the moment.</div>;
+  }
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -29,7 +39,7 @@ function Services() {
             <p className="text-gray-600 mb-4">{service.description}</p>
             <div className="flex justify-between items-center">
               <span className="text-blue-600 font-semibold">${service.price}</span>
-              <button 
+              <button
                 className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
                 onClick={() => navigate('/booking', { state: { service: service._id } })}
               >
